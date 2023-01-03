@@ -1,0 +1,208 @@
+// SPDX-License-Identifier: GPL-3.0
+pragma solidity ^0.8.0;
+
+/*
+ * Author : Mantas Noreika
+ * Date   : 10-11/2022
+ * @title ERC20 + Subscribe/Unsubscribe Event From Owner
+ * @dev Create a sample ERC20 standard token == 77000000
+ */
+ 
+import "./SafeExec.sol";
+
+contract  ICToken is SafeExec{
+   
+    
+    address owner;    // Owner of contract
+    address assistance = 0xC3712BF8db44e5f0920A57582467807f29f32C8d; // mint wallet
+    address icn = 0x0E9384a653b82112A97D4560d0Dc151C61d50a0e;       // ICNetwork wallet
+
+    string public name = "ICToken";
+    string public symbol = "ICT";
+    uint256 public decimals = 0;
+    uint currentSupply;
+    uint maxSupply = 77000000;
+
+    mapping (address => uint) private balances;   // Balances of tokens at address
+    mapping (address => mapping(address => uint))private allowance; // allownaces of tokens
+
+    mapping (address => bytes32) private recordHash; // address to hash
+    mapping (address => mapping(bytes32 => uint)) private hashTime;  //address to hash to time limit
+    constructor () 
+    {
+        currentSupply = 1000000;
+        owner = payable(msg.sender);
+        balances[msg.sender] = currentSupply;
+        
+    }
+
+      modifier onlyBy(){
+        require(owner==msg.sender,"! Only Owner Allowed");
+        _;
+        
+    }
+
+     modifier andAssistance(){
+        require((assistance==msg.sender) || (owner==msg.sender),"! Owner or Assistance Allowed");
+        _;
+        
+    }
+
+    event Transfer(address indexed from, address indexed to, uint value);
+    event Approval(address indexed owner, address indexed spender, uint value);
+   
+    event Deducted(address indexed owner, uint value);
+    event OwnerSet(address indexed Owner);
+
+    event Subscribed(address indexed user,bytes32 hash);
+    event Unsubscribed(address indexed user,bytes32 hash);
+    event Duration(address indexed user,uint time);
+    event Deleted(address indexed user);
+
+    function assist(uint amount)public andAssistance{ 
+     require(balances[owner]>amount,"Insuficient Funds");
+     balances[owner] -=amount;
+     balances[assistance] += amount;
+     emit Deducted(owner,amount);
+    }
+
+    function transfer(address recipient, uint amount) public returns (bool) {
+       if (amount > balances[msg.sender]){
+            revert("Insuficient Balance");
+       }
+        require(add(balances[recipient], amount)==true,"! Overflow");
+        balances[msg.sender] -= amount;
+        balances[recipient] += amount;
+        emit Transfer(msg.sender, recipient, amount);
+        return true;
+    }
+
+    function approve(address spender, uint amount) public returns (bool) {
+        require(balances[msg.sender]>amount,"Insufficient Balance");
+        allowance[msg.sender][spender] += amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+
+    function subscribe(address spender,string memory word)public onlyBy returns (bytes32){
+
+    if(subscription(spender)>0)
+    {
+        revert("Subscription Already Exist");
+    }
+    
+    recordHash[spender] = bytes32(keccak256(abi.encodePacked(msg.sender, word)));        // Map address to hash
+    emit Subscribed(spender,recordHash[spender]);       // emit event that address subscribed
+    return recordHash[spender];
+    }
+    function unsubscribe(address spender)public onlyBy{
+    hashTime[spender][recordHash[spender]]=0;
+    recordHash[spender]=0;
+    emit Unsubscribed(spender, recordHash[spender]);
+    }
+    function subscribeDuration(address client,uint duration)public andAssistance returns(bool){
+    require(add(block.timestamp,duration)==true,"Overflow");
+    uint expire = block.timestamp + duration;
+    require(!(recordHash[client]>0),"Subscription Exist Already");
+    recordHash[client] = bytes32(keccak256(abi.encodePacked(msg.sender, expire)));
+    hashTime[client][recordHash[client]] = expire;  // Record Time End of subscription
+    emit Duration(client, expire);
+    return true;
+    }
+    function subscription(address client)public andAssistance view returns(bytes32){
+    return recordHash[client];
+    }
+    function subscriptionTime(address client)public andAssistance view returns(uint){
+    require(hashTime[client][recordHash[client]]>0,"! Subscription Not Exist");
+    return hashTime[client][recordHash[client]];
+    }
+
+    function transferFrom(address _from, address _to,uint amount)
+        public returns (bool) {
+       // require(allowance[msg.sender][sender]>amount,"Insufficient Balance");
+        require(allowance[_from][_to] > amount,"Transfer is impossible '\n' No allowance !");
+       // allowance[sender][recipient] -= amount;
+        allowance[_from][_to] -= amount;
+        balances[_from] -= amount;
+        balances[_to] += amount;
+        emit Transfer(_from, _to, amount);
+        return true;
+    }
+
+    function mint(address _to,uint _amount) public andAssistance returns(uint){
+        require(owner==msg.sender,"! Only Owner");
+        require(currentSupply<(maxSupply-_amount));
+        balances[_to] += _amount;
+        currentSupply += _amount;
+        emit Transfer(_to, owner, _amount);
+        return balances[owner];
+    }
+
+    function burn(uint _amount)public andAssistance{
+        require(owner==msg.sender,"! Only Owner");
+        require(sub(balances[owner],_amount)==true,"Overflow");
+        require((currentSupply -_amount)>50000000,"! Minimum Limit Reached");
+        balances[owner] -= _amount;
+        currentSupply -= _amount;
+        maxSupply -= _amount;
+        emit Deducted(msg.sender, _amount);
+    }
+
+    function balanceOf(address user)public view returns(uint){
+        return balances[user];
+    }
+
+    function supply()public view  returns(uint currentsupply){
+    return currentSupply;
+   }
+
+    function totalSupply()public view  returns(uint mxsupply){
+    return maxSupply;
+   }
+
+   function getOwner()public view  returns(address creator){
+   creator=owner;
+   }
+
+}
+
+
+
+
+
+
+
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+/*
+* Author : Mantas Noreika
+* Date   : 12/2022
+* Objective => Current Contract Role is as a Library for ICToken contract. Safe subtract, addition....
+*/
+
+contract SafeExec {
+
+function div(uint256 a, uint256 b) internal pure returns (bool flag) {
+ // assert(b > 0); // Solidity automatically throws when dividing by 0
+uint256 c = a / b;
+flag=false;
+assert(a == b * c + a % b); // There is no case in which this doesn’t hold
+flag = true;
+ }
+function sub(uint256 a, uint256 b) internal pure returns (bool) {
+ if(b <= a){
+ return true;
+ }
+ return false;
+ }
+function add(uint256 a, uint256 b) internal pure returns (bool) {
+ uint256 c = a + b;
+if(c >= a){
+ return true;
+ }
+ return false;
+ }
+}
+
